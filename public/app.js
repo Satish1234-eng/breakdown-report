@@ -4,6 +4,8 @@
 
 const API = ''; // same origin; change to e.g. 'http://server-ip:3000' if hosted separately
 
+const ALLOWED_EXT = ['jpg','jpeg','png','gif','webp','pdf','doc','docx','xls','xlsx'];
+
 // ── Tab Switching ─────────────────────────────────────────────────────────────
 function switchTab(tab) {
   document.getElementById('panel-report').classList.toggle('hidden', tab !== 'report');
@@ -113,8 +115,32 @@ function clearError(fieldId) {
 }
 
 function clearAllErrors() {
-  ['reported_by','site_select','agency','problem_desc','root_cause'].forEach(clearError);
+  ['reported_by','site_select','agency','problem_desc','root_cause','attachment'].forEach(clearError);
 }
+
+// ── Attachment preview ────────────────────────────────────────────────────────
+document.getElementById('attachment').addEventListener('change', () => {
+  const fileInput = document.getElementById('attachment');
+  const nameEl = document.getElementById('attachment-name');
+  clearError('attachment');
+
+  const file = fileInput.files[0];
+  if (!file) {
+    nameEl.classList.add('hidden');
+    return;
+  }
+
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!ALLOWED_EXT.includes(ext)) {
+    setError('attachment', 'Please attach a valid file type (image, PDF, Word or Excel).');
+    fileInput.value = '';
+    nameEl.classList.add('hidden');
+    return;
+  }
+
+  nameEl.textContent = `📎 ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
+  nameEl.classList.remove('hidden');
+});
 
 // ── Report Form Submit ────────────────────────────────────────────────────────
 document.getElementById('reportForm').addEventListener('submit', async (e) => {
@@ -129,6 +155,8 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
   const device_name  = document.getElementById('device_name').value.trim();
   const problem_desc = document.getElementById('problem_desc').value.trim();
   const root_cause   = document.getElementById('root_cause').value.trim();
+  const fileInput    = document.getElementById('attachment');
+  const file         = fileInput.files[0] || null;
 
   let valid = true;
   if (!reported_by)  { setError('reported_by',  'Please enter your name.');              valid = false; }
@@ -137,6 +165,14 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
   if (!problem_desc) { setError('problem_desc',  'Please enter the problem description.'); valid = false; }
   if (!root_cause)   { setError('root_cause',    'Please enter the root cause / steps.'); valid = false; }
 
+  if (file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!ALLOWED_EXT.includes(ext)) {
+      setError('attachment', 'Please attach a valid file type (image, PDF, Word or Excel).');
+      valid = false;
+    }
+  }
+
   if (!valid) return;
 
   const btn = document.getElementById('submitBtn');
@@ -144,10 +180,22 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
   btn.textContent = 'Submitting…';
 
   try {
+    // Use multipart/form-data so the attachment (if any) travels with the report.
+    const formData = new FormData();
+    formData.append('reported_by', reported_by);
+    formData.append('site_id', site_id);
+    formData.append('agency', agency);
+    formData.append('area_name', area_name);
+    formData.append('device_name', device_name);
+    formData.append('problem_desc', problem_desc);
+    formData.append('root_cause', root_cause);
+    if (file) formData.append('attachment', file);
+
     const res  = await fetch(`${API}/api/reports`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reported_by, site_id: Number(site_id), agency, area_name, device_name, problem_desc, root_cause })
+      // NOTE: do not set Content-Type manually — the browser sets the
+      // correct multipart boundary automatically for FormData bodies.
+      body: formData
     });
     const data = await res.json();
 
@@ -156,6 +204,7 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
     } else {
       showBanner(`✅ Report #${data.id} submitted successfully!`, 'success');
       document.getElementById('reportForm').reset();
+      document.getElementById('attachment-name').classList.add('hidden');
       populateSiteDropdown(); // reset dropdown selection
     }
   } catch (err) {
@@ -183,6 +232,36 @@ function hideBanner() {
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
+// All records are fetched once and then filtered client-side across every
+// field (reported by, site, agency, area, device, problem/alarm name, and
+// root cause) — not just the problem description.
+let allReportsCache = null;
+
+const SEARCHABLE_FIELDS = [
+  'reported_by', 'site_name', 'agency', 'area_name',
+  'device_name', 'problem_desc', 'root_cause'
+];
+
+async function fetchAllReports(force = false) {
+  if (allReportsCache && !force) return allReportsCache;
+  const res = await fetch(`${API}/api/reports/search`); // no q param = full list
+  allReportsCache = await res.json();
+  return allReportsCache;
+}
+
+function filterReports(records, q) {
+  if (!q) return records;
+  const term = q.trim().toLowerCase();
+  if (!term) return records;
+
+  return records.filter(r =>
+    SEARCHABLE_FIELDS.some(field => {
+      const val = r[field];
+      return val && String(val).toLowerCase().includes(term);
+    })
+  );
+}
+
 async function doSearch() {
   const q = document.getElementById('search_input').value.trim();
   const container = document.getElementById('results-container');
@@ -192,9 +271,8 @@ async function doSearch() {
   status.classList.add('hidden');
 
   try {
-    const url = q ? `${API}/api/reports/search?q=${encodeURIComponent(q)}` : `${API}/api/reports/search`;
-    const res  = await fetch(url);
-    const data = await res.json();
+    const all  = await fetchAllReports();
+    const data = filterReports(all, q);
 
     status.textContent = q
       ? `${data.length} result(s) for "${q}"`
@@ -228,6 +306,7 @@ async function doSearch() {
           <span>👤 ${escHtml(r.reported_by)}</span>
           ${r.area_name   ? `<span>📍 ${escHtml(r.area_name)}</span>`   : ''}
           ${r.device_name ? `<span>🔧 ${escHtml(r.device_name)}</span>` : ''}
+          ${r.attachment_url ? `<span>📎 Attachment</span>` : ''}
         </div>
         <p class="mt-2 text-xs text-blue-500 font-medium">Click to view full details →</p>
       </div>
@@ -299,6 +378,17 @@ async function openDetail(id) {
         <label>Root Cause &amp; Solution Steps</label>
         <p class="bg-blue-50 border border-blue-200 rounded-lg p-3 leading-relaxed">${escHtml(r.root_cause)}</p>
       </div>
+
+      ${r.attachment_url ? `
+      <div class="detail-row">
+        <label>Attachment</label>
+        <p>
+          <a href="${escHtml(r.attachment_url)}" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium text-sm">
+            📎 ${escHtml(r.attachment_name || 'View attachment')}
+          </a>
+        </p>
+      </div>` : ''}
     `;
   } catch (err) {
     content.innerHTML = '<p class="text-red-500 text-sm">Failed to load report details.</p>';
