@@ -104,6 +104,15 @@
           <p class="err-msg hidden" id="err-root_cause">Please enter the root cause and solution steps.</p>
         </div>
 
+        <!-- Attachment (optional) -->
+        <div class="form-group">
+          <label class="form-label" for="attachment">Attach File <span class="text-gray-400 font-normal">(optional — image, PDF, Word or Excel)</span></label>
+          <input id="attachment" type="file" class="form-input file-input"
+            accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx" />
+          <p id="attachment-name" class="text-xs text-gray-400 mt-1 hidden"></p>
+          <p class="err-msg hidden" id="err-attachment">Please attach a valid file type (image, PDF, Word or Excel).</p>
+        </div>
+
         <!-- Submit -->
         <div class="flex justify-end mt-4">
           <button type="submit" id="submitBtn"
@@ -124,7 +133,7 @@
 
       <div class="flex gap-2 mb-5">
         <input id="search_input" type="text" class="form-input flex-1"
-          placeholder="Search by problem description or alarm name…"
+          placeholder="Search by name, site, agency, area, device, problem or root cause…"
           onkeydown="if(event.key==='Enter') doSearch()" />
         <button onclick="doSearch()"
           class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition">
