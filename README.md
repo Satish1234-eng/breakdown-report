@@ -1,53 +1,81 @@
-# Breakdown Report System
+# Breakdown Report System (Supabase edition)
 
-Log and track equipment breakdown problems, with multi-file attachments and full-text search across every field.
-
-## What was fixed
-
-1. **Could only attach one file** — the file input lacked `multiple`, and the JS only ever read `files[0]`. Now the input accepts up to 10 files per report, all are previewed before submit, and all are uploaded together.
-2. **Attachments not visible when viewing a search result** — the original frontend expected a backend that was never provided, so `attachment_url` was always `undefined`. This package includes a complete Express + SQLite backend that stores uploaded files on disk, saves them in an `attachments` table linked to each report, and returns them as a proper `attachments: [...]` array to both the search list and the detail view. The detail modal now lists every attachment as a clickable link.
+Log and track equipment breakdown problems. Data is stored in Supabase Postgres
+(`reports`, `sites` tables) and file attachments in Supabase Storage — nothing
+is stored on the app server's local disk, so data survives redeploys and
+restarts on platforms like Render.
 
 ## Project structure
 
 ```
 breakdown-report-system/
-├── server.js          # Express backend + SQLite + Multer (multi-file uploads)
+├── server.js          # Express backend, talks to Supabase (Postgres + Storage)
 ├── package.json
-├── public/
-│   ├── index.html
-│   ├── app.js
-│   └── style.css
-├── uploads/            # uploaded files are stored here (created automatically)
-└── data/                # breakdown.db (SQLite) lives here (created automatically)
+├── .gitignore
+└── public/
+    ├── index.html
+    ├── app.js
+    └── style.css
 ```
 
-## Setup
+## Required environment variables
 
-Requires Node.js 18+.
+Set these in Render → your service → **Environment** (never commit them to git):
+
+| Variable | Value |
+|---|---|
+| `SUPABASE_URL` | e.g. `https://<your-project-ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API → `service_role` key |
+| `SUPABASE_ATTACHMENT_BUCKET` | Name of your Storage bucket (default: `attachments`) |
+
+The `service_role` key has full database access — it must only ever live in
+Render's environment variables, never in code or in git.
+
+## Database schema (already exists in your Supabase project)
+
+```sql
+create table sites (
+  id   serial primary key,
+  name text unique not null
+);
+
+create table reports (
+  id             serial primary key,
+  reported_by    text not null,
+  site_id        integer references sites(id),
+  agency         text not null,
+  area_name      text,
+  device_name    text,
+  problem_desc   text not null,
+  root_cause     text not null,
+  created_at     timestamptz not null default now(),
+  attachment_url  text,
+  attachment_name text
+);
+```
+
+## Storage bucket
+
+Create a bucket (Supabase Dashboard → Storage → New bucket) matching
+`SUPABASE_ATTACHMENT_BUCKET` (default `attachments`), and mark it **Public**
+so uploaded files are viewable via their returned URL.
+
+## Local development
 
 ```bash
-cd breakdown-report-system
 npm install
-npm start
+SUPABASE_URL=https://your-ref.supabase.co SUPABASE_SERVICE_ROLE_KEY=your-key npm start
 ```
 
-Then open **http://localhost:3000** in your browser.
+Or create a local `.env` file (already gitignored) and use a tool like
+`dotenv` / `dotenv-cli` if you prefer not to pass env vars inline.
 
-By default the server runs on port 3000. To use a different port:
+## Deploying to Render
 
-```bash
-PORT=4000 npm start
-```
-
-## How it works
-
-- **Sites**: `GET /api/sites`, `POST /api/sites` — stored in the `sites` table, populated into the dropdown, with "+ Add New" opening a modal to create one on the fly.
-- **Submitting a report**: `POST /api/reports` accepts `multipart/form-data` with the report fields plus zero or more files under the `attachments` field. Files are validated by extension (`jpg, jpeg, png, gif, webp, pdf, doc, docx, xls, xlsx`), limited to 20 MB each and 10 files per report, and saved to `uploads/` with a unique filename. Each file gets a row in the `attachments` table linked to the report.
-- **Searching**: `GET /api/reports/search` returns every report (joined with site name and its attachments) in one call; the frontend filters client-side across reporter, site, agency, area, device, problem description, and root cause as you type.
-- **Viewing a report**: `GET /api/reports/:id` returns the full report plus its attachment list, which the detail modal renders as clickable download/view links (served statically from `/uploads/...`).
-
-## Notes / things to configure before production use
-
-- The SQLite database and uploaded files are stored on local disk (`data/` and `uploads/`) — back these up if you redeploy.
-- There's currently no authentication — anyone who can reach the server can submit reports and view/download attachments. Add an auth layer (e.g. a login gate or reverse-proxy auth) before exposing this outside a trusted network.
-- File size/type limits are configurable at the top of `server.js` (`ALLOWED_EXT`, `MAX_FILES_PER_REPORT`, `MAX_FILE_SIZE_MB`).
+1. Push this repo to GitHub.
+2. In Render, create/update the Web Service pointing at this repo.
+   - Build Command: `npm install`
+   - Start Command: `npm start`
+3. Set the three environment variables above in Render's dashboard.
+4. Deploy. Because all data lives in Supabase, redeploys and restarts no
+   longer wipe your reports or attachments.
