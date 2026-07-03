@@ -22,7 +22,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 // service_role key = full server-side access; NEVER expose this to the frontend
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
+const MAX_FILES = 10;
 const ALLOWED_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx'];
 const MAX_FILE_SIZE_MB = 20;
 
@@ -69,13 +69,16 @@ app.post('/api/sites', async (req, res) => {
 
 // ── Reports: create (single attachment, matching existing schema) ───────────
 app.post('/api/reports', (req, res) => {
-  upload.single('attachment')(req, res, async (err) => {
+  upload.array('attachments', MAX_FILES)(req, res, async (err) => {
     if (err) {
       if (err.message === 'INVALID_FILE_TYPE') {
-        return res.status(400).json({ error: 'Please attach a valid file type (image, PDF, Word or Excel).' });
+        return res.status(400).json({ error: 'Please attach only valid file types (image, PDF, Word or Excel).' });
       }
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: `File must be under ${MAX_FILE_SIZE_MB} MB.` });
+        return res.status(400).json({ error: `Each file must be under ${MAX_FILE_SIZE_MB} MB.` });
+      }
+      if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+        return res.status(400).json({ error: `You can attach up to ${MAX_FILES} files at once.` });
       }
       console.error(err);
       return res.status(400).json({ error: 'Upload failed.' });
@@ -87,16 +90,15 @@ app.post('/api/reports', (req, res) => {
       return res.status(400).json({ error: 'Missing required fields.' });
     }
 
-    let attachment_url = null;
-    let attachment_name = null;
+    const attachments = [];
 
-    if (req.file) {
-      const ext = path.extname(req.file.originalname);
+    for (const file of (req.files || [])) {
+      const ext = path.extname(file.originalname);
       const storageKey = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
 
       const { error: uploadError } = await supabase.storage
         .from(ATTACHMENT_BUCKET)
-        .upload(storageKey, req.file.buffer, { contentType: req.file.mimetype });
+        .upload(storageKey, file.buffer, { contentType: file.mimetype });
 
       if (uploadError) {
         console.error(uploadError);
@@ -104,8 +106,7 @@ app.post('/api/reports', (req, res) => {
       }
 
       const { data: publicUrlData } = supabase.storage.from(ATTACHMENT_BUCKET).getPublicUrl(storageKey);
-      attachment_url = publicUrlData.publicUrl;
-      attachment_name = req.file.originalname;
+      attachments.push({ url: publicUrlData.publicUrl, original_name: file.originalname });
     }
 
     const { data, error } = await supabase
@@ -118,8 +119,7 @@ app.post('/api/reports', (req, res) => {
         device_name: (device_name || '').trim(),
         problem_desc: problem_desc.trim(),
         root_cause: root_cause.trim(),
-        attachment_url,
-        attachment_name
+        attachments
       })
       .select()
       .single();
