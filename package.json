@@ -4,8 +4,8 @@
   "description": "Log and track equipment breakdown problems, backed by Supabase (Postgres + Storage).",
   "main": "server.js",
   "engines": {
-    "node": "20.x"
-  },
+  "node": "22.x"
+},
   "scripts": {
     "start": "node server.js"
   },
