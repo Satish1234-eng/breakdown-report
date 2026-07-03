@@ -5,6 +5,7 @@
 const API = ''; // same origin; change to e.g. 'http://server-ip:3000' if hosted separately
 
 const ALLOWED_EXT = ['jpg','jpeg','png','gif','webp','pdf','doc','docx','xls','xlsx'];
+const MAX_FILES = 10;
 
 // ── Tab Switching ─────────────────────────────────────────────────────────────
 function switchTab(tab) {
@@ -118,27 +119,37 @@ function clearAllErrors() {
   ['reported_by','site_select','agency','problem_desc','root_cause','attachment'].forEach(clearError);
 }
 
-// ── Attachment preview ────────────────────────────────────────────────────────
+// ── Attachment preview (multi-file) ───────────────────────────────────────────
 document.getElementById('attachment').addEventListener('change', () => {
   const fileInput = document.getElementById('attachment');
   const nameEl = document.getElementById('attachment-name');
   clearError('attachment');
 
-  const file = fileInput.files[0];
-  if (!file) {
+  const files = Array.from(fileInput.files);
+  if (files.length === 0) {
+    nameEl.innerHTML = '';
     nameEl.classList.add('hidden');
     return;
   }
 
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (!ALLOWED_EXT.includes(ext)) {
-    setError('attachment', 'Please attach a valid file type (image, PDF, Word or Excel).');
+  if (files.length > MAX_FILES) {
+    setError('attachment', `You can attach up to ${MAX_FILES} files at once.`);
     fileInput.value = '';
     nameEl.classList.add('hidden');
     return;
   }
 
-  nameEl.textContent = `📎 ${file.name} (${(file.size / 1024).toFixed(0)} KB)`;
+  const invalid = files.find(f => !ALLOWED_EXT.includes(f.name.split('.').pop().toLowerCase()));
+  if (invalid) {
+    setError('attachment', 'Please attach only valid file types (image, PDF, Word or Excel).');
+    fileInput.value = '';
+    nameEl.classList.add('hidden');
+    return;
+  }
+
+  nameEl.innerHTML = files
+    .map(f => `<div>📎 ${escHtml(f.name)} (${(f.size / 1024).toFixed(0)} KB)</div>`)
+    .join('');
   nameEl.classList.remove('hidden');
 });
 
@@ -156,7 +167,7 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
   const problem_desc = document.getElementById('problem_desc').value.trim();
   const root_cause   = document.getElementById('root_cause').value.trim();
   const fileInput    = document.getElementById('attachment');
-  const file         = fileInput.files[0] || null;
+  const files        = Array.from(fileInput.files);
 
   let valid = true;
   if (!reported_by)  { setError('reported_by',  'Please enter your name.');              valid = false; }
@@ -165,10 +176,13 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
   if (!problem_desc) { setError('problem_desc',  'Please enter the problem description.'); valid = false; }
   if (!root_cause)   { setError('root_cause',    'Please enter the root cause / steps.'); valid = false; }
 
-  if (file) {
-    const ext = file.name.split('.').pop().toLowerCase();
-    if (!ALLOWED_EXT.includes(ext)) {
-      setError('attachment', 'Please attach a valid file type (image, PDF, Word or Excel).');
+  if (files.length > MAX_FILES) {
+    setError('attachment', `You can attach up to ${MAX_FILES} files at once.`);
+    valid = false;
+  } else if (files.length) {
+    const invalid = files.find(f => !ALLOWED_EXT.includes(f.name.split('.').pop().toLowerCase()));
+    if (invalid) {
+      setError('attachment', 'Please attach only valid file types (image, PDF, Word or Excel).');
       valid = false;
     }
   }
@@ -180,7 +194,7 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
   btn.textContent = 'Submitting…';
 
   try {
-    // Use multipart/form-data so the attachment (if any) travels with the report.
+    // Use multipart/form-data so attachments (if any) travel with the report.
     const formData = new FormData();
     formData.append('reported_by', reported_by);
     formData.append('site_id', site_id);
@@ -189,7 +203,7 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
     formData.append('device_name', device_name);
     formData.append('problem_desc', problem_desc);
     formData.append('root_cause', root_cause);
-    if (file) formData.append('attachment', file);
+    files.forEach(f => formData.append('attachments', f)); // same field name, appended once per file
 
     const res  = await fetch(`${API}/api/reports`, {
       method: 'POST',
@@ -205,6 +219,7 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
       showBanner(`✅ Report #${data.id} submitted successfully!`, 'success');
       document.getElementById('reportForm').reset();
       document.getElementById('attachment-name').classList.add('hidden');
+      document.getElementById('attachment-name').innerHTML = '';
       populateSiteDropdown(); // reset dropdown selection
     }
   } catch (err) {
@@ -306,7 +321,9 @@ async function doSearch() {
           <span>👤 ${escHtml(r.reported_by)}</span>
           ${r.area_name   ? `<span>📍 ${escHtml(r.area_name)}</span>`   : ''}
           ${r.device_name ? `<span>🔧 ${escHtml(r.device_name)}</span>` : ''}
-          ${r.attachment_url ? `<span>📎 Attachment</span>` : ''}
+          ${r.attachments && r.attachments.length
+            ? `<span>📎 ${r.attachments.length} attachment${r.attachments.length > 1 ? 's' : ''}</span>`
+            : ''}
         </div>
         <p class="mt-2 text-xs text-blue-500 font-medium">Click to view full details →</p>
       </div>
@@ -332,6 +349,11 @@ async function openDetail(id) {
   try {
     const res = await fetch(`${API}/api/reports/${id}`);
     const r   = await res.json();
+
+    if (!res.ok) {
+      content.innerHTML = `<p class="text-red-500 text-sm">${escHtml(r.error || 'Failed to load report details.')}</p>`;
+      return;
+    }
 
     content.innerHTML = `
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -379,15 +401,17 @@ async function openDetail(id) {
         <p class="bg-blue-50 border border-blue-200 rounded-lg p-3 leading-relaxed">${escHtml(r.root_cause)}</p>
       </div>
 
-      ${r.attachment_url ? `
+      ${r.attachments && r.attachments.length ? `
       <div class="detail-row">
-        <label>Attachment</label>
-        <p>
-          <a href="${escHtml(r.attachment_url)}" target="_blank" rel="noopener"
-             class="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium text-sm">
-            📎 ${escHtml(r.attachment_name || 'View attachment')}
-          </a>
-        </p>
+        <label>Attachments (${r.attachments.length})</label>
+        <div class="flex flex-col gap-1.5 mt-1">
+          ${r.attachments.map(a => `
+            <a href="${escHtml(a.url)}" target="_blank" rel="noopener"
+               class="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium text-sm">
+              📎 ${escHtml(a.original_name)}
+            </a>
+          `).join('')}
+        </div>
       </div>` : ''}
     `;
   } catch (err) {
