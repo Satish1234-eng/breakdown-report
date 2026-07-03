@@ -104,14 +104,21 @@
           <p class="err-msg hidden" id="err-root_cause">Please enter the root cause and solution steps.</p>
         </div>
 
-        <!-- Attachments (optional, multiple) -->
-        <div class="form-group">
-          <label class="form-label" for="attachment">Attach Files <span class="text-gray-400 font-normal">(optional — image, PDF, Word or Excel; you can select more than one)</span></label>
-          <input id="attachment" type="file" class="form-input file-input" multiple
-            accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx" />
-          <div id="attachment-name" class="text-xs text-gray-500 mt-2 space-y-1 hidden"></div>
-          <p class="err-msg hidden" id="err-attachment">Please attach valid file types (image, PDF, Word or Excel), up to 10 files.</p>
-        </div>
+        <!-- Attachments (optional, multiple, added incrementally) -->
+<div class="form-group">
+  <label class="form-label">Attach Files <span class="text-gray-400 font-normal">(optional — image, PDF, Word or Excel; click "+ Add Files" as many times as needed)</span></label>
+
+  <input id="attachment" type="file" class="hidden" multiple
+    accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx" />
+  <button type="button" id="btn-add-files"
+    onclick="document.getElementById('attachment').click()"
+    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition">
+    + Add Files
+  </button>
+
+  <div id="attachment-name" class="mt-3 space-y-1.5"></div>
+  <p class="err-msg hidden" id="err-attachment">Please attach valid file types (image, PDF, Word or Excel), up to 10 files.</p>
+</div>
 
         <!-- Submit -->
         <div class="flex justify-end mt-4">
