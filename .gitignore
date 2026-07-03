@@ -1,4 +1,8 @@
 node_modules/
-breakdown.db
-*.db-shm
-*.db-wal
+data/*.db
+data/*.db-*
+uploads/*
+!uploads/.gitkeep
+!data/.gitkeep
+.env
+*.log
