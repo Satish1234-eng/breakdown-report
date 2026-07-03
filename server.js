@@ -1,234 +1,211 @@
+/* ══════════════════════════════════════════════════════════
+   Breakdown Report System — Backend Server
+   Express + better-sqlite3 + Multer (multi-file uploads)
+   ══════════════════════════════════════════════════════════ */
+
+const path = require('path');
+const fs = require('fs');
 const express = require('express');
-const cors    = require('cors');
-const path    = require('path');
-const fs      = require('fs');
-const multer  = require('multer');
-const { Pool } = require('pg');
+const cors = require('cors');
+const multer = require('multer');
+const Database = require('better-sqlite3');
 
-const app  = express();
 const PORT = process.env.PORT || 3000;
+const ROOT = __dirname;
+const UPLOAD_DIR = path.join(ROOT, 'uploads');
+const DATA_DIR = path.join(ROOT, 'data');
+const ALLOWED_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx'];
+const MAX_FILES_PER_REPORT = 10;
+const MAX_FILE_SIZE_MB = 20;
 
-// ── Database connection ───────────────────────────────────────────────────────
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL
-    ? { rejectUnauthorized: false }
-    : false
+// Ensure required folders exist
+[UPLOAD_DIR, DATA_DIR].forEach(dir => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS sites (
-      id   SERIAL PRIMARY KEY,
-      name TEXT UNIQUE NOT NULL
-    );
+// ── Database setup ────────────────────────────────────────────────────────────
+const db = new Database(path.join(DATA_DIR, 'breakdown.db'));
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
-    CREATE TABLE IF NOT EXISTS reports (
-      id              SERIAL PRIMARY KEY,
-      reported_by     TEXT        NOT NULL,
-      site_id         INTEGER     NOT NULL REFERENCES sites(id),
-      agency          TEXT        NOT NULL CHECK (agency IN ('Electrical','Mechanical')),
-      area_name       TEXT        NOT NULL DEFAULT '',
-      device_name     TEXT        NOT NULL DEFAULT '',
-      problem_desc    TEXT        NOT NULL,
-      root_cause      TEXT        NOT NULL,
-      attachment_url  TEXT,
-      attachment_name TEXT,
-      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sites (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+  );
 
-  // In case the table already existed from before this update, add the
-  // new columns if they're missing (safe to run every startup).
-  await pool.query(`
-    ALTER TABLE reports ADD COLUMN IF NOT EXISTS attachment_url TEXT;
-    ALTER TABLE reports ADD COLUMN IF NOT EXISTS attachment_name TEXT;
-  `);
+  CREATE TABLE IF NOT EXISTS reports (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    reported_by   TEXT NOT NULL,
+    site_id       INTEGER NOT NULL REFERENCES sites(id),
+    agency        TEXT NOT NULL,
+    area_name     TEXT,
+    device_name   TEXT,
+    problem_desc  TEXT NOT NULL,
+    root_cause    TEXT NOT NULL,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 
-  console.log('✅  Database tables ready.');
-}
+  CREATE TABLE IF NOT EXISTS attachments (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id     INTEGER NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+    filename      TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    url           TEXT NOT NULL
+  );
+`);
 
-// ── File upload setup (multer) ────────────────────────────────────────────────
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const ALLOWED_EXT = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.doc', '.docx', '.xls', '.xlsx'];
-
+// ── Multer (multi-file) config ────────────────────────────────────────────────
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
-    const safeExt  = path.extname(file.originalname).toLowerCase();
-    const uniqueId = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${uniqueId}${safeExt}`);
+    const ext = path.extname(file.originalname).toLowerCase();
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+    cb(null, unique);
   }
 });
+
+function fileFilter(req, file, cb) {
+  const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
+  if (!ALLOWED_EXT.includes(ext)) {
+    return cb(new Error('INVALID_FILE_TYPE'));
+  }
+  cb(null, true);
+}
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB cap
-  fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (!ALLOWED_EXT.includes(ext)) {
-      return cb(new Error('Unsupported file type.'));
-    }
-    cb(null, true);
+  fileFilter,
+  limits: {
+    fileSize: MAX_FILE_SIZE_MB * 1024 * 1024,
+    files: MAX_FILES_PER_REPORT
   }
 });
 
-// ── Middleware ────────────────────────────────────────────────────────────────
+// ── App setup ─────────────────────────────────────────────────────────────────
+const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOAD_DIR)); // serve uploaded files
+app.use('/uploads', express.static(UPLOAD_DIR));
+app.use(express.static(path.join(ROOT, 'public')));
 
 // ── Sites ─────────────────────────────────────────────────────────────────────
-app.get('/api/sites', async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT id, name FROM sites ORDER BY name ASC');
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database error.' });
-  }
+app.get('/api/sites', (req, res) => {
+  const sites = db.prepare('SELECT id, name FROM sites ORDER BY name').all();
+  res.json(sites);
 });
 
-app.post('/api/sites', async (req, res) => {
+app.post('/api/sites', (req, res) => {
   const name = (req.body.name || '').trim();
-  if (!name) return res.status(400).json({ error: 'Site name is required.' });
-
+  if (!name) {
+    return res.status(400).json({ error: 'Site name is required.' });
+  }
   try {
-    const dup = await pool.query(
-      'SELECT id FROM sites WHERE LOWER(name) = LOWER($1)',
-      [name]
-    );
-    if (dup.rows.length) {
-      return res.status(409).json({ error: `Site "${name}" already exists.` });
+    const info = db.prepare('INSERT INTO sites (name) VALUES (?)').run(name);
+    const site = db.prepare('SELECT id, name FROM sites WHERE id = ?').get(info.lastInsertRowid);
+    res.status(201).json(site);
+  } catch (e) {
+    if (String(e).includes('UNIQUE')) {
+      return res.status(409).json({ error: 'A site with that name already exists.' });
+    }
+    console.error(e);
+    res.status(500).json({ error: 'Failed to save site.' });
+  }
+});
+
+// ── Reports: create (multi-file) ─────────────────────────────────────────────
+app.post('/api/reports', (req, res) => {
+  upload.array('attachments', MAX_FILES_PER_REPORT)(req, res, (err) => {
+    if (err) {
+      if (err.message === 'INVALID_FILE_TYPE') {
+        return res.status(400).json({ error: 'One or more files have an invalid type (image, PDF, Word or Excel only).' });
+      }
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: `Each file must be under ${MAX_FILE_SIZE_MB} MB.` });
+      }
+      if (err.code === 'LIMIT_FILE_COUNT') {
+        return res.status(400).json({ error: `You can attach up to ${MAX_FILES_PER_REPORT} files.` });
+      }
+      console.error(err);
+      return res.status(400).json({ error: 'Upload failed.' });
     }
 
-    const { rows } = await pool.query(
-      'INSERT INTO sites (name) VALUES ($1) RETURNING id, name',
-      [name]
-    );
-    res.status(201).json(rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
+    const { reported_by, site_id, agency, area_name, device_name, problem_desc, root_cause } = req.body;
 
-// ── Reports ───────────────────────────────────────────────────────────────────
-// NOTE: now uses multer's `upload.single('attachment')` so it accepts
-// multipart/form-data (the file, if any, plus the regular text fields).
-app.post('/api/reports', upload.single('attachment'), async (req, res) => {
-  const {
-    reported_by, site_id, agency,
-    area_name, device_name, problem_desc, root_cause
-  } = req.body;
-
-  if (!reported_by || !site_id || !agency || !problem_desc || !root_cause) {
-    return res.status(400).json({ error: 'Missing required fields.' });
-  }
-  if (!['Electrical', 'Mechanical'].includes(agency)) {
-    return res.status(400).json({ error: 'Invalid agency value.' });
-  }
-
-  const attachment_url  = req.file ? `/uploads/${req.file.filename}` : null;
-  const attachment_name = req.file ? req.file.originalname : null;
-
-  try {
-    const { rows } = await pool.query(
-      `INSERT INTO reports
-         (reported_by, site_id, agency, area_name, device_name, problem_desc, root_cause, attachment_url, attachment_name)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-       RETURNING id`,
-      [
-        reported_by.trim(),
-        Number(site_id),
-        agency,
-        (area_name   || '').trim(),
-        (device_name || '').trim(),
-        problem_desc.trim(),
-        root_cause.trim(),
-        attachment_url,
-        attachment_name
-      ]
-    );
-    res.status(201).json({ id: rows[0].id, message: 'Report submitted successfully.' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
-
-// GET search — now also matches reported_by, site name, agency, area, device, and root cause
-app.get('/api/reports/search', async (req, res) => {
-  const q = (req.query.q || '').trim();
-  try {
-    let result;
-    if (!q) {
-      result = await pool.query(`
-        SELECT r.*, s.name AS site_name
-        FROM reports r JOIN sites s ON s.id = r.site_id
-        ORDER BY r.created_at DESC
-      `);
-    } else {
-      result = await pool.query(`
-        SELECT r.*, s.name AS site_name
-        FROM reports r JOIN sites s ON s.id = r.site_id
-        WHERE r.reported_by  ILIKE $1
-           OR s.name         ILIKE $1
-           OR r.agency       ILIKE $1
-           OR r.area_name    ILIKE $1
-           OR r.device_name  ILIKE $1
-           OR r.problem_desc ILIKE $1
-           OR r.root_cause   ILIKE $1
-        ORDER BY r.created_at DESC
-      `, [`%${q}%`]);
+    if (!reported_by || !site_id || !agency || !problem_desc || !root_cause) {
+      // Clean up any files already written to disk since the report is invalid
+      (req.files || []).forEach(f => fs.unlink(f.path, () => {}));
+      return res.status(400).json({ error: 'Missing required fields.' });
     }
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
 
-// GET single report
-app.get('/api/reports/:id', async (req, res) => {
-  try {
-    const { rows } = await pool.query(`
-      SELECT r.*, s.name AS site_name
-      FROM reports r JOIN sites s ON s.id = r.site_id
-      WHERE r.id = $1
-    `, [Number(req.params.id)]);
-    if (!rows.length) return res.status(404).json({ error: 'Report not found.' });
-    res.json(rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database error.' });
-  }
-});
+    const site = db.prepare('SELECT id FROM sites WHERE id = ?').get(site_id);
+    if (!site) {
+      (req.files || []).forEach(f => fs.unlink(f.path, () => {}));
+      return res.status(400).json({ error: 'Invalid site selected.' });
+    }
 
-// ── Multer error handler ──────────────────────────────────────────────────────
-app.use((err, req, res, next) => {
-  if (err instanceof multer.MulterError || err.message === 'Unsupported file type.') {
-    return res.status(400).json({ error: err.message });
-  }
-  next(err);
-});
+    const insertReport = db.prepare(`
+      INSERT INTO reports (reported_by, site_id, agency, area_name, device_name, problem_desc, root_cause)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const info = insertReport.run(
+      reported_by.trim(), site_id, agency,
+      (area_name || '').trim(), (device_name || '').trim(),
+      problem_desc.trim(), root_cause.trim()
+    );
+    const reportId = info.lastInsertRowid;
 
-// ── Catch-all ─────────────────────────────────────────────────────────────────
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// ── Start ─────────────────────────────────────────────────────────────────────
-initDb()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`🚀  Breakdown Report App → http://localhost:${PORT}`);
+    const insertAttachment = db.prepare(`
+      INSERT INTO attachments (report_id, filename, original_name, url)
+      VALUES (?, ?, ?, ?)
+    `);
+    (req.files || []).forEach(f => {
+      insertAttachment.run(reportId, f.filename, f.originalname, `/uploads/${f.filename}`);
     });
-  })
-  .catch(err => {
-    console.error('Failed to initialise database:', err.message);
-    process.exit(1);
+
+    res.status(201).json({ id: reportId });
   });
+});
+
+// ── Reports: list / search ───────────────────────────────────────────────────
+function attachReportAttachments(reports) {
+  const attStmt = db.prepare('SELECT id, original_name, url FROM attachments WHERE report_id = ?');
+  return reports.map(r => ({
+    ...r,
+    attachments: attStmt.all(r.id)
+  }));
+}
+
+app.get('/api/reports/search', (req, res) => {
+  const reports = db.prepare(`
+    SELECT reports.*, sites.name AS site_name
+    FROM reports
+    JOIN sites ON sites.id = reports.site_id
+    ORDER BY reports.created_at DESC
+  `).all();
+
+  res.json(attachReportAttachments(reports));
+});
+
+app.get('/api/reports/:id', (req, res) => {
+  const report = db.prepare(`
+    SELECT reports.*, sites.name AS site_name
+    FROM reports
+    JOIN sites ON sites.id = reports.site_id
+    WHERE reports.id = ?
+  `).get(req.params.id);
+
+  if (!report) return res.status(404).json({ error: 'Report not found.' });
+
+  const attachments = db.prepare('SELECT id, original_name, url FROM attachments WHERE report_id = ?').all(report.id);
+  res.json({ ...report, attachments });
+});
+
+// ── Fallback to index.html for the SPA ───────────────────────────────────────
+app.get('*', (req, res) => {
+  res.sendFile(path.join(ROOT, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`Breakdown Report System running at http://localhost:${PORT}`);
+});
