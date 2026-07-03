@@ -120,38 +120,53 @@ function clearAllErrors() {
 }
 
 // ── Attachment preview (multi-file) ───────────────────────────────────────────
+let selectedFiles = [];
+
 document.getElementById('attachment').addEventListener('change', () => {
   const fileInput = document.getElementById('attachment');
   const nameEl = document.getElementById('attachment-name');
   clearError('attachment');
 
-  const files = Array.from(fileInput.files);
-  if (files.length === 0) {
+  const newFiles = Array.from(fileInput.files);
+  fileInput.value = ''; // reset so the same file can be re-picked if needed
+
+  const invalid = newFiles.find(f => !ALLOWED_EXT.includes(f.name.split('.').pop().toLowerCase()));
+  if (invalid) {
+    setError('attachment', 'Please attach only valid file types (image, PDF, Word or Excel).');
+    return;
+  }
+
+  selectedFiles = selectedFiles.concat(newFiles);
+
+  if (selectedFiles.length > MAX_FILES) {
+    setError('attachment', `You can attach up to ${MAX_FILES} files at once.`);
+    selectedFiles = selectedFiles.slice(0, MAX_FILES);
+  }
+
+  renderFileList();
+});
+
+function renderFileList() {
+  const nameEl = document.getElementById('attachment-name');
+  if (selectedFiles.length === 0) {
     nameEl.innerHTML = '';
     nameEl.classList.add('hidden');
     return;
   }
-
-  if (files.length > MAX_FILES) {
-    setError('attachment', `You can attach up to ${MAX_FILES} files at once.`);
-    fileInput.value = '';
-    nameEl.classList.add('hidden');
-    return;
-  }
-
-  const invalid = files.find(f => !ALLOWED_EXT.includes(f.name.split('.').pop().toLowerCase()));
-  if (invalid) {
-    setError('attachment', 'Please attach only valid file types (image, PDF, Word or Excel).');
-    fileInput.value = '';
-    nameEl.classList.add('hidden');
-    return;
-  }
-
-  nameEl.innerHTML = files
-    .map(f => `<div>📎 ${escHtml(f.name)} (${(f.size / 1024).toFixed(0)} KB)</div>`)
+  nameEl.innerHTML = selectedFiles
+    .map((f, i) => `
+      <div class="flex items-center justify-between">
+        <span>📎 ${escHtml(f.name)} (${(f.size / 1024).toFixed(0)} KB)</span>
+        <button type="button" onclick="removeFile(${i})" class="text-red-500 text-xs ml-2">Remove</button>
+      </div>`)
     .join('');
   nameEl.classList.remove('hidden');
-});
+}
+
+function removeFile(index) {
+  selectedFiles.splice(index, 1);
+  renderFileList();
+}
 
 // ── Report Form Submit ────────────────────────────────────────────────────────
 document.getElementById('reportForm').addEventListener('submit', async (e) => {
@@ -167,7 +182,7 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
   const problem_desc = document.getElementById('problem_desc').value.trim();
   const root_cause   = document.getElementById('root_cause').value.trim();
   const fileInput    = document.getElementById('attachment');
-  const files        = Array.from(fileInput.files);
+  const files = selectedFiles;
 
   let valid = true;
   if (!reported_by)  { setError('reported_by',  'Please enter your name.');              valid = false; }
@@ -218,9 +233,10 @@ document.getElementById('reportForm').addEventListener('submit', async (e) => {
     } else {
       showBanner(`✅ Report #${data.id} submitted successfully!`, 'success');
       document.getElementById('reportForm').reset();
-      document.getElementById('attachment-name').classList.add('hidden');
-      document.getElementById('attachment-name').innerHTML = '';
-      populateSiteDropdown(); // reset dropdown selection
+selectedFiles = [];
+document.getElementById('attachment-name').classList.add('hidden');
+document.getElementById('attachment-name').innerHTML = '';
+populateSiteDropdown(); // reset dropdown selection
     }
   } catch (err) {
     showBanner('Network error. Please check your connection.', 'error');
