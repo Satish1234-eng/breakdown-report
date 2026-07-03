@@ -104,13 +104,13 @@
           <p class="err-msg hidden" id="err-root_cause">Please enter the root cause and solution steps.</p>
         </div>
 
-        <!-- Attachment (optional) -->
+        <!-- Attachments (optional, multiple) -->
         <div class="form-group">
-          <label class="form-label" for="attachment">Attach File <span class="text-gray-400 font-normal">(optional — image, PDF, Word or Excel)</span></label>
-          <input id="attachment" type="file" class="form-input file-input"
+          <label class="form-label" for="attachment">Attach Files <span class="text-gray-400 font-normal">(optional — image, PDF, Word or Excel; you can select more than one)</span></label>
+          <input id="attachment" type="file" class="form-input file-input" multiple
             accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx" />
-          <p id="attachment-name" class="text-xs text-gray-400 mt-1 hidden"></p>
-          <p class="err-msg hidden" id="err-attachment">Please attach a valid file type (image, PDF, Word or Excel).</p>
+          <div id="attachment-name" class="text-xs text-gray-500 mt-2 space-y-1 hidden"></div>
+          <p class="err-msg hidden" id="err-attachment">Please attach valid file types (image, PDF, Word or Excel), up to 10 files.</p>
         </div>
 
         <!-- Submit -->
